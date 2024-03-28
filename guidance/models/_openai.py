@@ -179,51 +179,70 @@ class OpenAIInstructEngine(OpenAIEngine):
                 chunk = ""
             yield chunk.encode("utf8")
 
+
 class OpenAIChat(OpenAI, Chat):
     pass
+
 
 class OpenAIChatEngine(OpenAIEngine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         path = os.path.join(platformdirs.user_cache_dir("guidance"), "openai.tokens")
         self.cache = dc.Cache(path)
-        
+
     def _hash_prompt(self, prompt):
         return hashlib.sha256(f"{prompt}".encode()).hexdigest()
 
     def _generator(self, prompt, temperature):
-        
+
         # find the role tags
         pos = 0
-        role_end = b'<|im_end|>'
+        role_end = b"<|im_end|>"
         messages = []
         found = True
         while found:
 
             # find the role text blocks
             found = False
-            for role_name,start_bytes in (("system", b'<|im_start|>system\n'), ("user", b'<|im_start|>user\n'), ("assistant", b'<|im_start|>assistant\n')):
+            for role_name, start_bytes in (
+                ("system", b"<|im_start|>system\n"),
+                ("user", b"<|im_start|>user\n"),
+                ("assistant", b"<|im_start|>assistant\n"),
+            ):
                 if prompt[pos:].startswith(start_bytes):
                     pos += len(start_bytes)
                     end_pos = prompt[pos:].find(role_end)
                     if end_pos < 0:
-                        assert role_name == "assistant", "Bad chat format! Last role before gen needs to be assistant!"
+                        assert (
+                            role_name == "assistant"
+                        ), "Bad chat format! Last role before gen needs to be assistant!"
                         break
-                    btext = prompt[pos:pos+end_pos]
+                    btext = prompt[pos : pos + end_pos]
+                    # if btext starts with http:// https:// or data:image/, we use a dictionary
+                    # for the content, instead of just the string
+                    content = btext.decode("utf8")
+                    if (
+                        btext.startswith(b"http://")
+                        or btext.startswith(b"https://")
+                        or btext.startswith(b"data:image/")
+                    ):
+                        btext = {
+                            "type": "image_url",
+                            "image_url": {"url": btext.decode("utf8")},
+                        }
                     pos += end_pos + len(role_end)
-                    messages.append({"role": role_name, "content": btext.decode("utf8")})
+                    messages.append({"role": role_name, "content": content})
                     found = True
                     break
-        
-        
-        
+
         # Add nice exception if no role tags were used in the prompt.
         # TODO: Move this somewhere more general for all chat models?
         if messages == []:
-            raise ValueError(f"The OpenAI model {self.model_name} is a Chat-based model and requires role tags in the prompt! \
+            raise ValueError(
+                f"The OpenAI model {self.model_name} is a Chat-based model and requires role tags in the prompt! \
             Make sure you are using guidance context managers like `with system():`, `with user():` and `with assistant():` \
-            to appropriately format your guidance program for this type of model.")
-  
+            to appropriately format your guidance program for this type of model."
+            )
 
         # Update shared data state
         self._reset_shared_data(prompt[:pos], temperature)
